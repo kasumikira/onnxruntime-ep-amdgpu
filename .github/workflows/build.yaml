@@ -8,20 +8,13 @@ on:
         default: '10.1.0'
         required: true
       ort_version:
-        description: Match the application's ONNX Runtime version
+        description: ONNX Runtime version
         default: '1.30.0'
         required: true
-
-permissions:
-  contents: read
 
 jobs:
   build:
     runs-on: windows-2025
-    timeout-minutes: 360
-    defaults:
-      run:
-        shell: pwsh -NoProfile -Command "$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true; & '{0}'"
     env:
       ROCM_VERSION: ${{ inputs.rocm_version }}
       ORT_VERSION: ${{ inputs.ort_version }}
@@ -41,21 +34,17 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
 
       - name: Install build tools and ROCm SDK
         run: |
-          python -m pip install 'cmake>=4.2' ninja https://github.com/RadeonOpenCompute/rbuild/archive/master.tar.gz
+          python -m pip install 'cmake>=4.2' https://github.com/RadeonOpenCompute/rbuild/archive/master.tar.gz
           python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel,device-all]==$env:ROCM_VERSION"
           $packages = (python -m pip list --format=json | ConvertFrom-Json).name
           $targets = ($packages -like 'rocm-sdk-device-*' -replace '^rocm-sdk-device-') -join ';'
-          if (!$targets) { throw 'No ROCm GPU device packages installed' }
           "GPU_TARGETS=$targets" >> $env:GITHUB_ENV
-          rocm-sdk init
           $root = rocm-sdk path --root
           "ROCM_ROOT=$root" >> $env:GITHUB_ENV
           "$root/lib/llvm/bin" >> $env:GITHUB_PATH
@@ -102,13 +91,11 @@ jobs:
 
       - name: Build MIGraphX plugin EP
         run: >-
-          ./ep/build.bat --build_dir ep-build --config Release
+          ./ep/build.bat --config Release
           --cmake_generator Ninja --use_migraphx --build_wheel --parallel 4 --hip_path "$env:ROCM_ROOT"
-          --cmake_extra_defines USE_HIP=OFF "Patch_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
+          --cmake_extra_defines "Patch_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: amd-migraphx-ep-wheels-windows-multiarch-ort-${{ inputs.ort_version }}
-          path: ep-build/Release/dist/*.whl
+          path: ep/build/Release/dist/*.whl
           if-no-files-found: error
-          retention-days: 14
