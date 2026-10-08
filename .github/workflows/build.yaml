@@ -38,9 +38,13 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
 
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '4.2.x'
+
       - name: Install build tools and ROCm SDK
         run: |
-          python -m pip install 'cmake>=4.2' https://github.com/RadeonOpenCompute/rbuild/archive/master.tar.gz
+          python -m pip install https://github.com/RadeonOpenCompute/rbuild/archive/master.tar.gz
           python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel,device-all]==$env:ROCM_VERSION"
           $packages = (python -m pip list --format=json | ConvertFrom-Json).name
           $targets = ($packages -like 'rocm-sdk-device-*' -replace '^rocm-sdk-device-') -join ';'
@@ -50,7 +54,14 @@ jobs:
           "$root/lib/llvm/bin" >> $env:GITHUB_PATH
           "$root/bin" >> $env:GITHUB_PATH
 
+      - uses: actions/cache@v4
+        id: deps
+        with:
+          path: migraphx/deps
+          key: migraphx-deps-${{ runner.os }}-${{ env.VCToolsVersion }}-${{ inputs.rocm_version }}-${{ hashFiles('migraphx/requirements.txt', 'migraphx/dev-requirements.txt', 'migraphx/rbuild.ini') }}
+
       - name: Build MIGraphX dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
         working-directory: migraphx
         env:
           CC: clang-cl
