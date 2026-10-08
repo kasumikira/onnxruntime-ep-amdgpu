@@ -1,0 +1,114 @@
+name: Build AMD MIGraphX EP for Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      rocm_version:
+        description: ROCm SDK version
+        default: '10.1.0'
+        required: true
+      ort_version:
+        description: Match the application's ONNX Runtime version
+        default: '1.30.0'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh -NoProfile -Command "$ErrorActionPreference = 'Stop'; $PSNativeCommandUseErrorActionPreference = $true; & '{0}'"
+    env:
+      ROCM_VERSION: ${{ inputs.rocm_version }}
+      ORT_VERSION: ${{ inputs.ort_version }}
+      MIGRAPHX_HOME: ${{ github.workspace }}/migraphx-install
+      CGET_BUILD_PATH: D:\b
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ROCm/AMDMIGraphX
+          ref: develop
+          path: migraphx
+
+      - uses: actions/checkout@v4
+        with:
+          path: ep
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install build tools and ROCm SDK
+        run: |
+          python -m pip install 'cmake>=4.2' ninja https://github.com/RadeonOpenCompute/rbuild/archive/master.tar.gz
+          python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel,device-all]==$env:ROCM_VERSION"
+          $packages = (python -m pip list --format=json | ConvertFrom-Json).name
+          $targets = ($packages -like 'rocm-sdk-device-*' -replace '^rocm-sdk-device-') -join ';'
+          if (!$targets) { throw 'No ROCm GPU device packages installed' }
+          "GPU_TARGETS=$targets" >> $env:GITHUB_ENV
+          rocm-sdk init
+          $root = rocm-sdk path --root
+          "ROCM_ROOT=$root" >> $env:GITHUB_ENV
+          "$root/lib/llvm/bin" >> $env:GITHUB_PATH
+          "$root/bin" >> $env:GITHUB_PATH
+
+      - name: Build MIGraphX dependencies
+        working-directory: migraphx
+        env:
+          CC: clang-cl
+          CXX: clang-cl
+          CXXFLAGS: /std:c++17
+        run: >-
+          rbuild prepare -d cget -s gh-win-gpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DISABLE_ASSEMBLY_FILES=On -DLLVM_ENABLE_DIA_SDK=Off
+
+      - name: Build and install MIGraphX
+        working-directory: migraphx
+        env:
+          CC: clang
+          CXX: clang++
+          CMAKE_PREFIX_PATH: ${{ env.ROCM_ROOT }}
+        run: |
+          rbuild build -d cget -s gh-win-gpu -G Ninja -T driver -DCMAKE_BUILD_TYPE=Release `
+            "-DGPU_TARGETS=$env:GPU_TARGETS" "-DCMAKE_INSTALL_PREFIX=$env:MIGRAPHX_HOME" `
+            -DBUILD_TESTING=Off -DMIGRAPHX_USE_AMDMLSS=Off
+          cmake --install build --config Release
+
+      - name: Download ONNX Runtime SDK
+        run: |
+          $name = "onnxruntime-win-x64-$env:ORT_VERSION"
+          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$env:ORT_VERSION/$name.zip" -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath ort
+          $sdk = (Resolve-Path "ort/$name").Path.Replace('\', '/')
+          $config = "$sdk/lib/cmake/onnxruntime"
+          New-Item -ItemType Directory -Force $config | Out-Null
+          @"
+          set(onnxruntime_VERSION $env:ORT_VERSION)
+          add_library(onnxruntime::onnxruntime SHARED IMPORTED)
+          set_target_properties(onnxruntime::onnxruntime PROPERTIES
+            IMPORTED_LOCATION "$sdk/lib/onnxruntime.dll"
+            IMPORTED_IMPLIB "$sdk/lib/onnxruntime.lib"
+            INTERFACE_INCLUDE_DIRECTORIES "$sdk/include")
+          "@ | Set-Content "$config/onnxruntimeConfig.cmake"
+          "ORT_HOME=$sdk" >> $env:GITHUB_ENV
+
+      - name: Build MIGraphX plugin EP
+        run: >-
+          ./ep/build.bat --build_dir ep-build --config Release
+          --cmake_generator Ninja --use_migraphx --build_wheel --parallel 4 --hip_path "$env:ROCM_ROOT"
+          --cmake_extra_defines USE_HIP=OFF "Patch_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: amd-migraphx-ep-wheels-windows-multiarch-ort-${{ inputs.ort_version }}
+          path: ep-build/Release/dist/*.whl
+          if-no-files-found: error
+          retention-days: 14
