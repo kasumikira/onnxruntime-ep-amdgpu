@@ -34,7 +34,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.12'
 
       - uses: ilammy/msvc-dev-cmd@v1
 
@@ -57,7 +57,7 @@ jobs:
           CXX: clang-cl
           CXXFLAGS: /std:c++17
         run: >-
-          rbuild prepare -d cget -s gh-win-gpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DISABLE_ASSEMBLY_FILES=On -DLLVM_ENABLE_DIA_SDK=Off
+          rbuild prepare -d deps -s gh-win-gpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DISABLE_ASSEMBLY_FILES=On -DLLVM_ENABLE_DIA_SDK=Off
 
       - name: Build and install MIGraphX
         working-directory: migraphx
@@ -66,7 +66,7 @@ jobs:
           CXX: clang++
           CMAKE_PREFIX_PATH: ${{ env.ROCM_ROOT }}
         run: |
-          rbuild build -d cget -s gh-win-gpu -G Ninja -T driver -DCMAKE_BUILD_TYPE=Release `
+          rbuild build -d deps -s gh-win-gpu -G Ninja -T driver -DCMAKE_BUILD_TYPE=Release `
             "-DGPU_TARGETS=$env:GPU_TARGETS" "-DCMAKE_INSTALL_PREFIX=$env:MIGRAPHX_HOME" `
             -DBUILD_TESTING=Off -DMIGRAPHX_USE_AMDMLSS=Off
           cmake --install build --config Release
@@ -88,6 +88,10 @@ jobs:
             INTERFACE_INCLUDE_DIRECTORIES "$sdk/include")
           "@ | Set-Content "$config/onnxruntimeConfig.cmake"
           "ORT_HOME=$sdk" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
 
       - name: Build MIGraphX plugin EP
         run: >-
