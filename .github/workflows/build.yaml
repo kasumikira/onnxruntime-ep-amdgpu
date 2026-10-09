@@ -20,6 +20,8 @@ jobs:
       ORT_VERSION: ${{ inputs.ort_version }}
       MIGRAPHX_HOME: ${{ github.workspace }}/migraphx-install
       CGET_BUILD_PATH: D:\b
+      CCACHE_DIR: ${{ github.workspace }}/ccache
+      CCACHE_COMPILERCHECK: content
 
     steps:
       - uses: actions/checkout@v6
@@ -69,14 +71,31 @@ jobs:
           "$root/lib/llvm/bin" >> $env:GITHUB_PATH
           "$root/bin" >> $env:GITHUB_PATH
 
-      - uses: actions/cache@v5
-        id: deps
+      - name: Install ccache
+        run: |
+          $toolDir = Join-Path $env:RUNNER_TEMP 'ccache-tool'
+          $archive = Join-Path $env:RUNNER_TEMP 'ccache.zip'
+          Invoke-WebRequest 'https://github.com/ccache/ccache/releases/download/v4.14.1/ccache-4.14.1-windows-x86_64.zip' -OutFile $archive
+          Expand-Archive $archive -DestinationPath $toolDir
+          $ccache = (Get-ChildItem $toolDir -Filter ccache.exe -File -Recurse).FullName.Replace('\', '/')
+          $cmake = (Get-Command cmake).Source.Replace('\', '/')
+          $cacheDir = $env:CCACHE_DIR.Replace('\', '/')
+          New-Item -ItemType Directory -Force $cacheDir | Out-Null
+          "CCACHE_EXE=$ccache" >> $env:GITHUB_ENV
+          "CCACHE_LAUNCHER=$cmake;-E;env;CCACHE_DIR=$cacheDir;CCACHE_COMPILERCHECK=content;$ccache" >> $env:GITHUB_ENV
+
+      - uses: actions/cache/restore@v5
+        id: ccache
         with:
-          path: migraphx/deps
-          key: migraphx-deps-${{ runner.os }}-${{ env.VCToolsVersion }}-${{ inputs.rocm_version }}-${{ hashFiles('migraphx/requirements.txt', 'migraphx/dev-requirements.txt', 'migraphx/rbuild.ini') }}
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-v1-windows-4.14.1-${{ env.VCToolsVersion }}-${{ inputs.rocm_version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-v1-windows-4.14.1-${{ env.VCToolsVersion }}-${{ inputs.rocm_version }}-
+
+      - name: Reset ccache statistics
+        run: '& $env:CCACHE_EXE --zero-stats'
 
       - name: Build MIGraphX dependencies
-        if: steps.deps.outputs.cache-hit != 'true'
         working-directory: migraphx
         env:
           CC: clang-cl
@@ -84,6 +103,8 @@ jobs:
           CXXFLAGS: /std:c++17
         run: >-
           rbuild prepare -d deps -s gh-win-gpu -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLVM_DISABLE_ASSEMBLY_FILES=On -DLLVM_ENABLE_DIA_SDK=Off
+          "-DCMAKE_C_COMPILER_LAUNCHER=$env:CCACHE_LAUNCHER"
+          "-DCMAKE_CXX_COMPILER_LAUNCHER=$env:CCACHE_LAUNCHER"
 
       - name: Build and install MIGraphX
         working-directory: migraphx
@@ -94,6 +115,8 @@ jobs:
         run: |
           rbuild build -d deps -s gh-win-gpu -G Ninja -DCMAKE_BUILD_TYPE=Release `
             "-DGPU_TARGETS=$env:GPU_TARGETS" "-DCMAKE_INSTALL_PREFIX=$env:MIGRAPHX_HOME" `
+            "-DCMAKE_C_COMPILER_LAUNCHER=$env:CCACHE_LAUNCHER" `
+            "-DCMAKE_CXX_COMPILER_LAUNCHER=$env:CCACHE_LAUNCHER" `
             -DBUILD_TESTING=Off -DMIGRAPHX_USE_AMDMLSS=Off
           cmake --install build --config Release
 
@@ -124,8 +147,20 @@ jobs:
           ./ep/build.bat --config Release
           --cmake_generator Ninja --use_migraphx --build_wheel --parallel 4 --hip_path "$env:ROCM_ROOT"
           --cmake_extra_defines "Patch_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
+          "CMAKE_C_COMPILER_LAUNCHER=$env:CCACHE_LAUNCHER"
+          "CMAKE_CXX_COMPILER_LAUNCHER=$env:CCACHE_LAUNCHER"
 
       - uses: actions/upload-artifact@v6
         with:
           path: ep/build/Release/dist/*.whl
           if-no-files-found: error
+
+      - name: Show ccache statistics
+        if: always() && steps.ccache.outcome == 'success'
+        run: '& $env:CCACHE_EXE --show-stats --verbose'
+
+      - uses: actions/cache/save@v5
+        if: always() && steps.ccache.outcome == 'success'
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache.outputs.cache-primary-key }}
