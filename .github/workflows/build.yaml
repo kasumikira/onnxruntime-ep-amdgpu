@@ -137,6 +137,7 @@ jobs:
           $cmake = (Get-Command cmake).Source.Replace('\', '/')
           $cacheDir = $env:CCACHE_DIR.Replace('\', '/')
           $launcher = "$cmake;-E;env;CCACHE_DIR=$cacheDir;CCACHE_COMPILERCHECK=content;$env:CCACHE_EXE"
+          Remove-Item Env:VSINSTALLDIR
           ./ep/build.bat --config Release `
             --cmake_generator Ninja --use_migraphx --build_wheel --parallel 4 --hip_path "$env:ROCM_ROOT" `
             --cmake_extra_defines "Patch_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe" `
