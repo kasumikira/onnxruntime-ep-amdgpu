@@ -22,21 +22,36 @@ jobs:
       CGET_BUILD_PATH: D:\b
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: ROCm/AMDMIGraphX
           ref: develop
           path: migraphx
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: ep
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Set up MSVC
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw "Visual Studio C++ build tools not found" }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars64.bat'
+          $vsEnvironment = & $env:ComSpec /d /s /c "`"$vcvars`" >nul && set"
+          if ($LASTEXITCODE -ne 0) { throw "vcvars64.bat failed: $LASTEXITCODE" }
+          foreach ($line in $vsEnvironment) {
+              if ($line -match '^([^=]+)=(.*)$') {
+                  $name, $value = $Matches[1], $Matches[2]
+                  if ([Environment]::GetEnvironmentVariable($name) -cne $value) {
+                      "$name=$value" >> $env:GITHUB_ENV
+                  }
+              }
+          }
 
       - uses: jwlawson/actions-setup-cmake@v2
         with:
@@ -54,7 +69,7 @@ jobs:
           "$root/lib/llvm/bin" >> $env:GITHUB_PATH
           "$root/bin" >> $env:GITHUB_PATH
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         id: deps
         with:
           path: migraphx/deps
@@ -77,7 +92,7 @@ jobs:
           CXX: clang++
           CMAKE_PREFIX_PATH: ${{ env.ROCM_ROOT }}
         run: |
-          rbuild build -d deps -s gh-win-gpu -G Ninja -T driver -DCMAKE_BUILD_TYPE=Release `
+          rbuild build -d deps -s gh-win-gpu -G Ninja -DCMAKE_BUILD_TYPE=Release `
             "-DGPU_TARGETS=$env:GPU_TARGETS" "-DCMAKE_INSTALL_PREFIX=$env:MIGRAPHX_HOME" `
             -DBUILD_TESTING=Off -DMIGRAPHX_USE_AMDMLSS=Off
           cmake --install build --config Release
@@ -100,7 +115,7 @@ jobs:
           "@ | Set-Content "$config/onnxruntimeConfig.cmake"
           "ORT_HOME=$sdk" >> $env:GITHUB_ENV
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.14'
 
@@ -110,7 +125,7 @@ jobs:
           --cmake_generator Ninja --use_migraphx --build_wheel --parallel 4 --hip_path "$env:ROCM_ROOT"
           --cmake_extra_defines "Patch_EXECUTABLE=C:/Program Files/Git/usr/bin/patch.exe"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           path: ep/build/Release/dist/*.whl
           if-no-files-found: error
